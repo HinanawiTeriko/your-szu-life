@@ -51,3 +51,6 @@ docs/
 .codebuddy
 .qoder
 .zcode
+
+# 本地模拟器、构建缓存和验收报告（可能包含截图；不随 Git 同步）
+/.android-test/

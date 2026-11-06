@@ -1,0 +1,10 @@
+// 只用于隔离的测试包；Rust/Kotlin namespace 保持项目原值。
+allprojects { project ->
+    project.plugins.withId("com.android.application") {
+        project.extensions.getByName("android").buildTypes.named("debug") {
+            applicationIdSuffix = ".onboarding_test"
+            resValue "string", "app_name", "泥深（修复测试）"
+            resValue "string", "main_activity_title", "泥深（修复测试）"
+        }
+    }
+}

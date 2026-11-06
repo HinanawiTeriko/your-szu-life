@@ -150,3 +150,9 @@ release. Add a tool name to select part of the graph. For example, run
 6. 若 Android lint 报 `EnsureInitializerMetadata`，检查生成的 `SplitInitializer` 与 `AndroidManifest.xml` 的 `<meta-data>` 配对，不要用无关的 lint baseline 掩盖问题。
 
 当前参考实现已经验证了应用级逻辑导航栈、memory history、tab `replace`、深链接 root 补齐、独立网费窗口及统一返回桥接；但此前记录中 Android 真机返回键和真实网费账户流程仍需单独验收，后续工作应明确区分自动化检查、原生设备验收和真实账户验收。
+
+## 远程 Android 测试
+
+用户要求将测试放到远端 Linux 主机时，先阅读 `testing/android/README.md`，使用 `scripts/android-test.sh` 管理构建、设备参数、AVD 和报告。华为 NAM-AL00 的验收基线保存在 `testing/android/huawei-nam-al00.json`。Ubuntu x86_64 模拟器不等同于华为 Chrome 92 WebView，不得把普通 AVD 通过等同于华为旧内核验证。
+
+发布和真机 APK 默认仍只构建 aarch64。用户明确指定 x86_64 模拟器测试时，使用 `--target x86_64` 的单 ABI 测试包；不要构建全架构包。设备命令始终明确指定 `--serial`，不自动卸载、清除数据或传入真实账户密码。报告留在 `.android-test/`；提交记录和公开设备参数可随仓库保存，私钥、Cookie、账户和真实用户截图不随 Git 同步。

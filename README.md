@@ -38,3 +38,7 @@ yay -S your-szu-life
 # or
 paru -S your-szu-life
 ```
+
+## Android 开发与远程测试
+
+真机基线、Ubuntu 22.04 x86_64 模拟器流程和 SSH 授权说明见 [Android 测试文档](testing/android/README.md)。
