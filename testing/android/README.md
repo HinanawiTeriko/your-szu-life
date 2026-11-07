@@ -22,6 +22,8 @@ Ubuntu 的 x86_64 模拟器使用 x86_64 APK。真机的 ARM64 APK 不直接用�
 
 旧 WebView 兼容实现只接受已验证的 schema 14。现代系统镜像应验证新版 Cookie API；华为旧内核的认证兼容性仍以原真机验收为依据，不得声称普通 AVD 完整复现了华为环境。
 
+实际下载的 API 30 Google APIs 镜像内置 Chrome 83.0.4103.106，无法解析当前前端脚本，启动会白屏。API 30 只是 Android API 基线，运行导航测试前必须确认 WebView 能加载当前前端。本次远端回归使用独立的 API 36 AVD，复用已有镜像，其 WebView 为 Chrome 133.0.6943.137；屏幕仍为 1080×2340、480 dpi，实测 CSS 视口为 360×711。
+
 ## 拉取仓库
 
 ```bash
@@ -47,6 +49,8 @@ sudo systemctl enable --now ssh
 ```
 
 再安装 JDK 21（软件源提供时可运行 `sudo apt install openjdk-21-jdk`）。如果当前 Ubuntu 软件源没有 OpenJDK 21，先从受信任的软件源安装 JDK 21，或安装项目 CI 使用的 JDK 25，再设置 `JAVA_HOME`。项目 Gradle 版本为 9.1.0。Android 构建不需要安装桌面 GTK/WebKit；如果还要跑 Linux Rust 测试，另装桌面依赖与 aria2。
+
+复用 IDE 自带的 Java 时，先核对 `JAVA_HOME/bin/javac` 和 `JAVA_HOME/bin/jlink` 都存在。有些 IDE 的运行时包含编译器却不包含 `jlink`，Android 的 JDK image 转换会因此失败；应在测试目录另装完整 JDK。
 
 确认 BIOS/云主机已启用虚拟化、能看到 `/dev/kvm`。如果是虚拟机，还需宿主允许嵌套虚拟化。加入 `kvm` 组后重新登录，以新会话生效。账户只需自己的工作目录和 `/dev/kvm` 访问权，日常构建测试不需要 sudo。
 
@@ -75,7 +79,7 @@ vp install --frozen-lockfile
 
 官方资料：Android [模拟器加速](https://developer.android.com/studio/run/emulator-acceleration)、[命令行参数](https://developer.android.com/studio/run/emulator-commandline)、[SDK 命令行工具](https://developer.android.com/studio)。Rust [安装](https://www.rust-lang.org/tools/install)和 [Vite+ 安装](https://viteplus.dev/guide/)。
 
-## 一次完整测试
+## 构建与测试命令
 
 脚本默认将运行数据保存在仓库的 `.android-test/`，该目录已被 Git 忽略。默认 Rust/Gradle 并行度为 2；高性能主机可设置 `CARGO_BUILD_JOBS=4 ANDROID_TEST_WORKERS=4`。
 
@@ -93,9 +97,13 @@ bash scripts/android-test.sh native-test --target x86_64 --serial emulator-5556
 
 `native-test` 只安装 `in.rinne.your_szu_life.onboarding_test` 及其 instrumentation 测试包，指定序列号并核对 ABI、包名、测试目标和两个 APK 的签名；不会卸载应用、重置设置或填写账号。默认运行 `OnboardingNavigationTest`：要求空测试应用的初始化第一步，移除 CSS `:has()` 规则后检查按钮未被覆盖，用触摸事件触发空表单校验。它不会调用真实凭据登录。非空应用会明确失败，而非清除用户数据。
 
+导航测试结束时先把 MainActivity 切到 stopped 状态，再让 runner 输出结果。Tauri 在最后一个 Activity 销毁时会退出进程，所以该测试类使用 `waitForActivitiesToComplete=false`，避免 Activity 销毁把同进程的 runner 一起关闭；其他测试类保持默认行为。
+
 Android 的 `am instrument` 可能在测试失败时也返回进程状态 0，脚本会同时检查 `OK (N tests)`，保证失败不会被误报通过。报告包含设备参数及 instrumentation 结果，保存在 `.android-test/reports/`。
 
-报告的 `build.json` 记录执行测试时的 Git 提交、工作区是否有未提交修改、目标架构及应用/测试 APK 的 SHA-256。提交字段表示当前 checkout，实际安装产物以 SHA-256 标识；切换提交后需重新构建，才能把 APK 与当前代码对应。导航测试还会在 runner 输出中记录 `WEBVIEW_BASELINE`，包含实际 User-Agent、CSS 视口与旧 API 支持情况。仓库新增的 instrumentation 用例已在本机编译通过，Android 单元测试 51 项通过；本机尚未启动这个 AVD。模拟器运行和新测试机的 KVM 能力须在 SSH 接通后实测。
+报告的 `build.json` 记录执行测试时的 Git 提交、工作区是否有未提交修改、目标架构及应用/测试 APK 的 SHA-256。提交字段表示当前 checkout，实际安装产物以 SHA-256 标识；切换提交后需重新构建，才能把 APK 与当前代码对应。导航测试还会在 runner 输出中记录 `WEBVIEW_BASELINE`，包含实际 User-Agent、CSS 视口与旧 API 支持情况。
+
+2026-11-07 已通过远端 x86_64 APK 构建、51 项 Android 单元测试及 API 36 的导航 instrumentation 测试（`OK (1 test)`）。测试验证了移除 `:has()` 样式后导航元素数量为 0、登录按钮未被覆盖，并通过原生触摸触发空表单校验。没有使用真实账户登录，华为旧 WebView 的登录验收记录仍独立保存。
 
 测试结束：
 
@@ -104,6 +112,51 @@ bash scripts/android-test.sh emulator-stop
 ```
 
 脚本核对 AVD 名称后只关闭自己选定的模拟器。持续运行的模拟器可以用于后续排查。
+
+## 复用多人共用的开发账户
+
+可以复用已有账户的 SDK、JDK 和模拟器程序。为这个项目设置独立的 `ANDROID_TEST_ROOT`、`ANDROID_USER_HOME`、`ANDROID_EMULATOR_HOME`、`ANDROID_AVD_HOME`、`GRADLE_USER_HOME`、`CARGO_HOME` 和 `RUSTUP_HOME`，并保存到项目的 `.android-test/env.sh`，不改该账户的全局 shell 或构建配置。缺少的 SDK 组件安装到自己的 SDK 目录，已有组件可以通过符号链接复用。
+
+ADB 也使用独立服务。下面的端口只是示例，先确认与其他开发者的端口没有冲突；显式关闭设备自动扫描，避免新服务连接别人的 USB 设备或模拟器：
+
+```bash
+export ADB_SERVER_SOCKET=tcp:localhost:5041
+export ANDROID_ADB_SERVER_PORT=5041
+export ADB_LOCAL_TRANSPORT_MAX_PORT=5553
+export ADB_USB=0
+export ADB_MDNS_AUTO_CONNECT=0
+
+# 在独立服务或终端中以前台模式运行；只监听本机回环地址。
+adb -L tcp:5041 server nodaemon
+```
+
+`ANDROID_ADB_SERVER_PORT` 让新模拟器注册到这个 ADB 服务。`ADB_LOCAL_TRANSPORT_MAX_PORT=5553` 低于模拟器自动扫描的起始端口，禁止该服务自动发现其他模拟器。脚本仍要求明确的设备序列号。不要对共用的默认 ADB 服务执行 `kill-server` 或重连所有设备。
+
+模拟器由独立 systemd 用户服务管理时，使用 `emulator-run`，让模拟器保持前台运行；`emulator-start` 启动的后台子进程可能随 systemd 服务结束而被清理：
+
+```bash
+bash scripts/android-test.sh emulator-create --avd szu-codex-api30-x86_64
+bash scripts/android-test.sh emulator-run --avd szu-codex-api30-x86_64 --port 5666
+```
+
+`ANDROID_TEST_EMULATOR_MEMORY_MB`（默认 4096）和 `ANDROID_TEST_EMULATOR_CORES`（默认 4）控制 AVD 的内存与虚拟 CPU。`ANDROID_TEST_DATA_PARTITION_GB`（默认 6）控制新建 AVD 的数据分区；只测试初始化且空间有限时可设为 2。单独设置 Rust/Gradle worker 数无法限制总 CPU 或内存；多人共用主机应通过 CPU 亲和性和独立 cgroup 限制这一组构建、ADB 与模拟器进程，并监控项目及其缓存的总磁盘占用。启动前脚本同时核对 ADB 设备和两个监听端口，防止误用其他服务已占用的端口。
+
+系统镜像可根据最低容量要求扩大数据分区：本次 API 36 镜像将 2 GiB 配置调整到约 6 GiB。空间预算应以 `adb shell df -h /data` 和主机 `du` 的实际占用核对，不能只看 AVD 配置。
+
+共用账户建议选用默认 ADB 扫描范围之外的端口，例如 5666/5667，再让模拟器注册到自己的 ADB 服务；这样其他开发者重启默认 ADB 时也不会自动发现这个测试模拟器。
+
+当前已准备的共享主机环境保存在项目 `.android-test/README.md`。它使用 `szu-codex-api36-x86_64`、ADB 5041、模拟器 5666/5667、3 GiB AVD RAM；整组任务固定 4 核，内存软阈值 6 GiB、硬上限 7 GiB。工具、缓存和 AVD 合计占用按整个项目目录监控，接近预算时只停止 `szu-codex-*` 服务。以下命令适用于这个已经准备好的环境；`.android-test/` 属于主机本地状态，不随 Git clone 复制：
+
+```bash
+.android-test/bin/run doctor bash scripts/android-test.sh doctor --target x86_64
+.android-test/bin/run build bash .android-test/build.sh
+.android-test/bin/emulator-start
+.android-test/bin/run native-test bash scripts/android-test.sh native-test \
+  --target x86_64 --serial emulator-5666
+.android-test/bin/emulator-stop
+```
+
+该主机上的旧版 `avdmanager` 未识别 API 36 镜像，因此已在独立目录中创建并验证 AVD 配置，未修改共享镜像的元数据。后续沿用已保存的配置即可。构建助手会先停止自己的模拟器，再开始编译，避免内存回收导致启动和测试超时。
 
 ## 华为旧内核单独回归
 

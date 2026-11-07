@@ -1,12 +1,15 @@
 package `in`.rinne.your_szu_life
 
 import android.os.SystemClock
+import android.os.Bundle
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebView
 import androidx.test.core.app.ActivityScenario
+import androidx.test.platform.app.InstrumentationRegistry
 import androidx.webkit.WebViewFeature
+import androidx.lifecycle.Lifecycle
 import org.json.JSONObject
 import org.json.JSONTokener
 import org.junit.Assert.*
@@ -28,10 +31,15 @@ class OnboardingNavigationTest {
     val finished = CountDownLatch(1)
     var result: String? = null
     scenario.onActivity { activity ->
-      val target = checkNotNull(webView(activity.window.decorView))
-      target.evaluateJavascript(expression) { value -> result = value; finished.countDown() }
+      val target = webView(activity.window.decorView)
+      if (target == null) {
+        result = "null"
+        finished.countDown()
+      } else {
+        target.evaluateJavascript(expression) { value -> result = value; finished.countDown() }
+      }
     }
-    assertTrue("WebView evaluation timed out", finished.await(3, TimeUnit.SECONDS))
+    assertTrue("WebView evaluation timed out", finished.await(10, TimeUnit.SECONDS))
     val decoded = JSONTokener(checkNotNull(result)).nextValue()
     return if (decoded is String) JSONObject(decoded) else JSONObject()
   }
@@ -56,21 +64,29 @@ class OnboardingNavigationTest {
   """.trimIndent()
 
   @Test fun loginActionRemainsTouchableWhenHasSelectorsAreUnavailable() {
-    ActivityScenario.launch(MainActivity::class.java).use { scenario ->
-      val deadline = SystemClock.uptimeMillis() + 15000
+    val scenario = ActivityScenario.launch(MainActivity::class.java)
+    try {
+      // First WebView startup and software shader compilation take longer on a shared host.
+      val deadline = SystemClock.uptimeMillis() + 45000
       var state = JSONObject()
       while (SystemClock.uptimeMillis() < deadline) {
         state = evaluate(scenario, snapshot)
         if (state.optBoolean("ready")) break
         SystemClock.sleep(200)
       }
-      assertTrue("Requires a fresh test app at the first onboarding step", state.optBoolean("ready"))
-      println("WEBVIEW_BASELINE: " + JSONObject()
-        .put("userAgent", state.getString("userAgent"))
-        .put("viewportWidthCssPx", state.getInt("width"))
-        .put("viewportHeightCssPx", state.getInt("height"))
-        .put("cssHasSupported", state.getBoolean("cssHasSupported"))
-        .put("getCookieInfoSupported", WebViewFeature.isFeatureSupported(WebViewFeature.GET_COOKIE_INFO)))
+      val baseline = JSONObject()
+        .put("userAgent", state.optString("userAgent", "unavailable"))
+        .put("viewportWidthCssPx", state.optInt("width"))
+        .put("viewportHeightCssPx", state.optInt("height"))
+        .put("cssHasSupported", state.optBoolean("cssHasSupported"))
+        .put("frontendReady", state.optBoolean("ready"))
+        .put("navigationCount", state.optInt("navCount", -1))
+        .put("buttonClickable", state.optBoolean("clickable"))
+        .put("getCookieInfoSupported", WebViewFeature.isFeatureSupported(WebViewFeature.GET_COOKIE_INFO))
+      InstrumentationRegistry.getInstrumentation().sendStatus(0, Bundle().apply {
+        putString("stream", "WEBVIEW_BASELINE: $baseline\n")
+      })
+      assertTrue("Requires a fresh test app and a WebView able to load the frontend", state.optBoolean("ready"))
       evaluate(scenario, """
         JSON.stringify((function() {
           function prune(owner) {
@@ -103,6 +119,10 @@ class OnboardingNavigationTest {
         SystemClock.sleep(100)
       }
       fail("Touch did not reach the credential validation handler")
+    } finally {
+      // Destroying Tauri's last Activity exits the process that also runs AndroidJUnitRunner.
+      // Stop the Activity first; native-test lets the runner report results before process exit.
+      scenario.moveToState(Lifecycle.State.CREATED)
     }
   }
 }

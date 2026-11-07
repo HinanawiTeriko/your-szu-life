@@ -43,13 +43,19 @@ export ANDROID_TEST_ROOT="${ANDROID_TEST_ROOT:-$repo_root/.android-test}"
 export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
 export ANDROID_SDK_ROOT="$ANDROID_HOME"
 export ANDROID_USER_HOME="${ANDROID_USER_HOME:-$ANDROID_TEST_ROOT/android-user}"
+export ANDROID_EMULATOR_HOME="${ANDROID_EMULATOR_HOME:-$ANDROID_TEST_ROOT/emulator-home}"
 export ANDROID_AVD_HOME="${ANDROID_AVD_HOME:-$ANDROID_TEST_ROOT/avd}"
 export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$ANDROID_TEST_ROOT/gradle}"
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
 export PATH="$repo_root/node_modules/.bin:${ANDROID_HOME:+$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin:}$PATH"
 gradle_workers="${ANDROID_TEST_WORKERS:-2}"
+emulator_memory="${ANDROID_TEST_EMULATOR_MEMORY_MB:-4096}"
+emulator_cores="${ANDROID_TEST_EMULATOR_CORES:-4}"
+data_partition_gb="${ANDROID_TEST_DATA_PARTITION_GB:-6}"
 [[ "$gradle_workers" =~ ^[1-9][0-9]*$ ]] || fail 'ANDROID_TEST_WORKERS must be positive.'
 [[ "$CARGO_BUILD_JOBS" =~ ^[1-9][0-9]*$ ]] || fail 'CARGO_BUILD_JOBS must be positive.'
+[[ "$emulator_memory" =~ ^[1-9][0-9]*$ && "$emulator_cores" =~ ^[1-9][0-9]*$ ]] || fail 'Emulator memory and cores must be positive.'
+[[ "$data_partition_gb" =~ ^[1-9][0-9]*$ ]] || fail 'ANDROID_TEST_DATA_PARTITION_GB must be positive.'
 app_package=in.rinne.your_szu_life.onboarding_test
 android_dir="$repo_root/src-tauri/gen/android"
 app_apk="$android_dir/app/build/outputs/apk/$arch/debug/app-$arch-debug.apk"
@@ -66,6 +72,7 @@ Usage: bash scripts/android-test.sh COMMAND [OPTIONS]
   native-test      Install isolated APKs and run one instrumentation class; requires --serial
   emulator-create  Create an API 30 Google x86_64 AVD; requires an installed image
   emulator-start   Start this AVD headlessly with KVM; wait at most 180 seconds
+  emulator-run     Run this AVD in the foreground (for a dedicated systemd service)
   emulator-stop    Stop only this AVD after checking its name
 
 Options: --target aarch64|x86_64 (default aarch64), --serial SERIAL,
@@ -76,6 +83,8 @@ For Ubuntu x86_64 emulators explicitly use --target x86_64.
 native-test defaults to OnboardingNavigationTest and requires a fresh test app.
 For legacy schema-14 devices use --native-class in.rinne.your_szu_life.LegacyAuthCookieStoreTest.
 No command uninstalls apps, clears user data or installs SDK packages automatically.
+ANDROID_TEST_EMULATOR_MEMORY_MB and ANDROID_TEST_EMULATOR_CORES set emulator resources.
+ANDROID_TEST_DATA_PARTITION_GB sets the new AVD data partition size (default 6 GiB).
 EOF
 }
 
@@ -86,6 +95,9 @@ sdk_ready() {
 build_ready() {
   sdk_ready
   need java; need python3; need rustup; need cargo; need vp; need rg
+  if [[ -n "${JAVA_HOME:-}" ]]; then
+    [[ -x "$JAVA_HOME/bin/javac" && -x "$JAVA_HOME/bin/jlink" ]] || fail 'JAVA_HOME must point to a complete JDK with javac and jlink.'
+  fi
   export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_HOME/ndk/27.0.12077973}"
   export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
   export NDK_HOME="$ANDROID_NDK_HOME"
@@ -142,6 +154,32 @@ reports_ready() {
   chmod 700 "$report_output"
 }
 
+emulator_ready() {
+  sdk_ready; need emulator; need adb; need python3
+  [[ -f "$ANDROID_AVD_HOME/$avd.ini" ]] || fail 'Create the AVD first.'
+  [[ -r /dev/kvm && -w /dev/kvm ]] || fail 'This user needs /dev/kvm access.'
+  serial="emulator-$port"
+  [[ "$(adb devices | awk -v serial="$serial" '$1==serial {print $1}')" != "$serial" ]] || fail 'Emulator port already in use.'
+  # Another developer's emulator may belong to a different ADB server.
+  python3 - "$port" <<'PY'
+import errno, socket, sys
+for port in (int(sys.argv[1]), int(sys.argv[1]) + 1):
+    for family, host in ((socket.AF_INET, '127.0.0.1'), (socket.AF_INET6, '::1')):
+        try:
+            with socket.socket(family, socket.SOCK_STREAM) as probe:
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                probe.bind((host, port))
+                probe.listen(1)
+        except OSError as error:
+            if family == socket.AF_INET6 and error.errno in (errno.EAFNOSUPPORT, errno.EADDRNOTAVAIL):
+                continue
+            raise SystemExit(f'Emulator port {port} is unavailable: {error}')
+PY
+  emulator -accel-check
+  emulator_args=(-avd "$avd" -port "$port" -no-window -no-audio -no-boot-anim
+    -gpu swiftshader -accel on -no-snapshot -memory "$emulator_memory" -cores "$emulator_cores")
+}
+
 cd "$repo_root"
 case "$command_name" in
   help) usage;;
@@ -185,8 +223,13 @@ pathlib.Path(output).write_text(json.dumps(record, indent=2) + '\n')
 PY
     adb -s "$serial" install -r "$app_apk"
     adb -s "$serial" install -r "$test_apk"
+    runner_args=(-w -e class "$native_class")
+    if [[ "$native_class" = in.rinne.your_szu_life.OnboardingNavigationTest ]]; then
+      # The test stops MainActivity; finishing it would exit Tauri before JUnit can report.
+      runner_args+=(-e waitForActivitiesToComplete false)
+    fi
     # am instrument may return exit 0 even when assertions fail; inspect the runner output.
-    adb -s "$serial" shell am instrument -w -e class "$native_class" \
+    adb -s "$serial" shell am instrument "${runner_args[@]}" \
       "$app_package.test/androidx.test.runner.AndroidJUnitRunner" | tee "$report_output/instrumentation.txt"
     python3 - "$report_output/instrumentation.txt" <<'PY'
 import pathlib, re, sys
@@ -204,25 +247,23 @@ PY
     [[ ! -e "$ANDROID_AVD_HOME/$avd.ini" && ! -e "$ANDROID_AVD_HOME/$avd.avd" ]] || fail 'AVD already exists; it will not be overwritten.'
     mkdir -p "$ANDROID_AVD_HOME"
     printf 'no\n' | avdmanager create avd --name "$avd" --package "$image" --path "$ANDROID_AVD_HOME/$avd.avd" --device pixel_5
-    python3 - "$ANDROID_AVD_HOME/$avd.avd/config.ini" <<'PY'
+    python3 - "$ANDROID_AVD_HOME/$avd.avd/config.ini" "$emulator_memory" "$emulator_cores" "$data_partition_gb" <<'PY'
 import pathlib, sys
 path = pathlib.Path(sys.argv[1])
-values = dict(line.split('=', 1) for line in path.read_text().splitlines() if '=' in line)
+values = {key.strip(): value.strip() for key, value in
+          (line.split('=', 1) for line in path.read_text().splitlines() if '=' in line)}
 values.update({'hw.lcd.width':'1080', 'hw.lcd.height':'2340', 'hw.lcd.density':'480',
-               'hw.ramSize':'4096', 'hw.cpu.ncore':'4', 'disk.dataPartition.size':'6G'})
+               'hw.ramSize':sys.argv[2], 'hw.cpu.ncore':sys.argv[3], 'disk.dataPartition.size':sys.argv[4]+'G'})
 path.write_text(''.join(f'{key}={value}\n' for key,value in values.items()))
 PY
     printf 'Created AVD: %s\n' "$avd";;
+  emulator-run)
+    emulator_ready
+    exec emulator "${emulator_args[@]}";;
   emulator-start)
-    sdk_ready; need emulator; need adb; need timeout
-    [[ -f "$ANDROID_AVD_HOME/$avd.ini" ]] || fail 'Create the AVD first.'
-    [[ -r /dev/kvm && -w /dev/kvm ]] || fail 'This user needs /dev/kvm access.'
-    serial="emulator-$port"
-    [[ "$(adb devices | awk -v serial="$serial" '$1==serial {print $1}')" != "$serial" ]] || fail 'Emulator port already in use.'
-    emulator -accel-check
+    need timeout; emulator_ready
     mkdir -p "$ANDROID_TEST_ROOT/emulators"
-    nohup emulator -avd "$avd" -port "$port" -no-window -no-audio -no-boot-anim \
-      -gpu swiftshader -accel on -no-snapshot -memory 4096 -cores 4 \
+    nohup emulator "${emulator_args[@]}" \
       >"$ANDROID_TEST_ROOT/emulators/$avd.log" 2>&1 </dev/null &
     emulator_pid=$!
     printf '%s\n' "$emulator_pid" >"$ANDROID_TEST_ROOT/emulators/$avd.pid"
