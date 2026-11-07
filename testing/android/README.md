@@ -1,6 +1,6 @@
 # Android 真机记录与远程模拟器测试
 
-适用测试主机：Ubuntu 22.04、Intel/AMD x86_64。测试分支为 `test/android-remote-runner`，包含 `38c2768` 初始化导航修复和 `e406806` 旧 WebView 登录兼容修复。上游 PR 使用 `fix/android-onboarding-navigation` 分支。
+适用测试主机：Ubuntu 22.04、Intel/AMD x86_64。当前测试分支为 `fix/android-ui-layout`，包含初始化导航、旧 WebView 登录兼容、首页排版和菜单遮挡修复，以及远程测试脚本。上游 PR 使用 `fix/android-onboarding-navigation` 分支。
 
 ## 已保存的真机参数
 
@@ -27,7 +27,7 @@ Ubuntu 的 x86_64 模拟器使用 x86_64 APK。真机的 ARM64 APK 不直接用�
 ## 拉取仓库
 
 ```bash
-git clone --branch test/android-remote-runner --single-branch \
+git clone --branch fix/android-ui-layout --single-branch \
   https://github.com/HinanawiTeriko/your-szu-life.git
 cd your-szu-life
 git rev-parse HEAD
@@ -145,7 +145,7 @@ bash scripts/android-test.sh emulator-run --avd szu-codex-api30-x86_64 --port 56
 
 共用账户建议选用默认 ADB 扫描范围之外的端口，例如 5666/5667，再让模拟器注册到自己的 ADB 服务；这样其他开发者重启默认 ADB 时也不会自动发现这个测试模拟器。
 
-当前已准备的共享主机环境保存在项目 `.android-test/README.md`。它使用 `szu-codex-api36-x86_64`、ADB 5041、模拟器 5666/5667、3 GiB AVD RAM；整组任务固定 4 核，内存软阈值 6 GiB、硬上限 7 GiB。工具、缓存和 AVD 合计占用按整个项目目录监控，接近预算时只停止 `szu-codex-*` 服务。以下命令适用于这个已经准备好的环境；`.android-test/` 属于主机本地状态，不随 Git clone 复制：
+当前已准备的共享主机环境保存在项目 `.android-test/README.md`。它使用 `szu-codex-api36-x86_64`、ADB 5041、模拟器 5666/5667、3 GiB AVD RAM；整组任务固定 4 核，内存软阈值 6 GiB、硬上限 7 GiB。用户已将项目磁盘预算增加到 25GB，监控在约 23GB 时停止本组服务以保留余量。为同时保留 ARM64 / x86_64 构建缓存，已移除本任务创建但不能运行当前前端的旧 API 30 AVD；需要时可重新创建。工具、缓存和 AVD 合计占用按整个项目目录监控，接近预算时只停止 `szu-codex-*` 服务。以下命令适用于这个已经准备好的环境；`.android-test/` 属于主机本地状态，不随 Git clone 复制：
 
 ```bash
 .android-test/bin/run doctor bash scripts/android-test.sh doctor --target x86_64
@@ -157,6 +157,10 @@ bash scripts/android-test.sh emulator-run --avd szu-codex-api30-x86_64 --port 56
 ```
 
 该主机上的旧版 `avdmanager` 未识别 API 36 镜像，因此已在独立目录中创建并验证 AVD 配置，未修改共享镜像的元数据。后续沿用已保存的配置即可。构建助手会先停止自己的模拟器，再开始编译，避免内存回收导致启动和测试超时。
+
+## 页面排版与浮层检查
+
+[ui-layout.md](ui-layout.md) 说明如何使用虚拟数据检查构建后的首页、初始化和其他顶级页面。脚本在 Chromium 92 与现代浏览器上分别执行 18 个场景，保存截图、浏览器版本和实际点击结果。它独立于 Android instrumentation，不能代替真机认证或原生输入法验收。
 
 ## 华为旧内核单独回归
 
