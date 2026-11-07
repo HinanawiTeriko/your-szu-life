@@ -160,7 +160,7 @@ bash scripts/android-test.sh emulator-run --avd szu-codex-api30-x86_64 --port 56
 
 ## 页面排版与浮层检查
 
-[ui-layout.md](ui-layout.md) 说明如何使用虚拟数据检查构建后的首页、初始化和其他顶级页面。脚本在 Chromium 92 与现代浏览器上分别执行 18 个场景，保存截图、浏览器版本和实际点击结果。它独立于 Android instrumentation，不能代替真机认证或原生输入法验收。
+[ui-layout.md](ui-layout.md) 说明如何使用虚拟数据检查构建后的首页、初始化和其他顶级页面。脚本在 Chromium 92 与现代浏览器上分别执行 25 个场景，保存截图、浏览器版本和实际点击结果；包括带图表的电费详情、生活页入口、校园服务的四个面板及六类待办标签。它独立于 Android instrumentation，不能代替真机认证或原生输入法验收。
 
 ## 华为旧内核单独回归
 
